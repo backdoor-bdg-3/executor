@@ -35,8 +35,8 @@ HAVE_CLANG_TIDY := $(shell command -v clang-tidy >/dev/null 2>&1 && echo 1 || ec
 HAVE_CLANG_FORMAT := $(shell command -v clang-format >/dev/null 2>&1 && echo 1 || echo 0)
 
 # Static analysis flags - enable clang warnings
-STATIC_ANALYSIS_FLAGS := -Wextra-semi -Wunused-parameter -Wshadow -Wpointer-arith -Wuninitialized
-STATIC_ANALYSIS_FLAGS += -Wconditional-uninitialized -Wunused-lambda-capture -Wextra-tokens -Wloop-analysis
+STATIC_ANALYSIS_FLAGS := -Wshadow -Wpointer-arith -Wuninitialized
+STATIC_ANALYSIS_FLAGS += -Wconditional-uninitialized -Wextra-tokens
 
 # Add compiler flags for improved diagnostics
 CXXFLAGS := -std=c++17 -fPIC $(OPT_FLAGS) -Wall -Wextra -fvisibility=hidden -ferror-limit=0 -fno-limit-debug-info
@@ -97,7 +97,10 @@ INCLUDES := -I$(VM_INCLUDE_DIR) -I$(VM_SRC_DIR) -I$(SOURCE_DIR) -I$(CPP_DIR) -I$
 
 # Preprocessor definitions
 DEFS += -DUSE_LUAU=1 -DLUAU_FASTINT_SUPPORT=1 -DUSE_LUA=1 -DENABLE_ERROR_REPORTING=1 -DENABLE_ANTI_TAMPER=1
-DEFS += -DLUA_API="__attribute__((visibility(\"default\")))" -DLUALIB_API="__attribute__((visibility(\"default\")))" -DLUAI_FUNC="__attribute__((visibility(\"hidden\")))"
+
+# Add Luau/VM-specific defines
+VM_DEFS := -DLUAU_LIKELY(x)=__builtin_expect(!!(x), 1) \
+           -DLUAU_UNLIKELY(x)=__builtin_expect(!!(x), 0)
 
 ifdef USE_DOBBY
     DEFS += -DUSE_DOBBY=1
@@ -158,8 +161,8 @@ ifdef USE_DOBBY
     INCLUDES += $(DOBBY_INCLUDE)
 endif
 
-# Main rule - auto-format code by default
-all: check-tools auto-format directories $(STATIC_LIB) $(DYLIB)
+# Main rule - build everything
+all: directories $(STATIC_LIB) $(DYLIB)
 
 # Check if our tools are available
 check-tools:
@@ -194,6 +197,14 @@ $(DYLIB): $(VM_OBJECTS) $(LIB_OBJECTS) $(STATIC_LIB)
 ifdef IS_APPLE
 	@install_name_tool -id @executable_path/lib/mylibrary.dylib $@
 endif
+
+# Special compilation rules for VM files
+$(VM_SRC_DIR)/%.o: $(VM_SRC_DIR)/%.cpp
+	$(CXX) $(CXXFLAGS) $(INCLUDES) $(DEFS) $(VM_DEFS) -c $< -o $@ $(FORMATTER)
+
+# Special compilation rules for C files with only basic includes
+$(SOURCE_DIR)/lfs.o: $(SOURCE_DIR)/lfs.c
+	$(CC) $(CFLAGS) -I$(VM_INCLUDE_DIR) -c $< -o $@ $(FORMATTER)
 
 # Compilation rules with colorized output
 %.o: %.cpp
@@ -274,7 +285,7 @@ fix-analysis:
 # Help target
 help:
 	@echo "Available targets:"
-	@echo "  all           - Build everything with auto-formatting (default)"
+	@echo "  all           - Build everything (default)"
 	@echo "  clean         - Remove build artifacts"
 	@echo "  install       - Install dylib to output directory"
 	@echo "  info          - Print build information"

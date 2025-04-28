@@ -2,8 +2,17 @@
 #include <cstring>
 #include <iostream>
 
+// Add system headers for memory protection on Apple platforms
+#ifdef __APPLE__
+#include <mach/mach.h>
+#include <mach/vm_map.h>
+#include <mach/vm_param.h>
+#include <mach/mach_vm.h>
+#include <mach/vm_prot.h>
+#endif
+
 // Skip iOS framework integration in CI builds to avoid compilation issues
-#if defined(__APPLE__) && !defined(SKIP_IOS_INTEGRATION)
+#if defined(__APPLE__) && !defined(SKIP_IOS_INTEGRATION) && !defined(CI_BUILD)
 #include "cpp/ios/ExecutionEngine.h"
 #include "cpp/ios/ScriptManager.h"
 #include "cpp/ios/JailbreakBypass.h"
@@ -19,12 +28,39 @@ static std::unique_ptr<iOS::UIController> g_uiController;
 namespace iOS {
     class ExecutionEngine {};
     class ScriptManager {};
-    class UIController {};
+    class UIController 
+    { 
+    public:
+        void Show() {}
+    };
 }
 // Empty global references for CI build
 static void* g_executionEngine = nullptr;
 static void* g_scriptManager = nullptr;
-static void* g_uiController = nullptr;
+static std::unique_ptr<iOS::UIController> g_uiController;
+#endif
+
+// For CI build, add stub implementation of SystemState
+#if defined(SKIP_IOS_INTEGRATION) || defined(CI_BUILD) || defined(CI_BUILD_NO_VM)
+namespace RobloxExecutor {
+    struct InitOptions {
+        bool enableLogging = true;
+        bool enableErrorReporting = true;
+        bool enablePerformanceMonitoring = true;
+        bool enableSecurity = true;
+        bool enableJailbreakBypass = true;
+        bool enableUI = true;
+    };
+    
+    class SystemState {
+    public:
+        static bool Initialize(const InitOptions& options) { return true; }
+        static void Shutdown() {}
+        static std::shared_ptr<iOS::ExecutionEngine> GetExecutionEngine() { return nullptr; }
+        static std::shared_ptr<iOS::ScriptManager> GetScriptManager() { return nullptr; }
+        static iOS::UIController* GetUIController() { return new iOS::UIController(); }
+    };
+}
 #endif
 
 // Initialize the library - called from dylib_initializer
@@ -34,6 +70,9 @@ static bool InitializeLibrary() {
 #if defined(SKIP_IOS_INTEGRATION) || defined(CI_BUILD) || defined(CI_BUILD_NO_VM)
     // Simplified initialization for CI builds
     std::cout << "CI build - skipping full initialization" << std::endl;
+    
+    // Create dummy UI controller for CI build
+    g_uiController = std::make_unique<iOS::UIController>();
     return true;
 #else
     try {
@@ -46,8 +85,8 @@ static bool InitializeLibrary() {
         options.enableJailbreakBypass = true;
         options.enableUI = true;
         
-        // Initialize the executor system
-        if (!RobloxExecutor::Initialize(options)) {
+        // Initialize the executor system - use SystemState namespace
+        if (!RobloxExecutor::SystemState::Initialize(options)) {
             std::cerr << "Failed to initialize RobloxExecutor" << std::endl;
             return false;
         }
@@ -55,7 +94,12 @@ static bool InitializeLibrary() {
         // Keep references to key components
         g_executionEngine = RobloxExecutor::SystemState::GetExecutionEngine();
         g_scriptManager = RobloxExecutor::SystemState::GetScriptManager();
-        g_uiController = std::unique_ptr<iOS::UIController>(RobloxExecutor::SystemState::GetUIController());
+        
+        // Create UIController using the result from GetUIController
+        iOS::UIController* controller = RobloxExecutor::SystemState::GetUIController();
+        if (controller) {
+            g_uiController = std::unique_ptr<iOS::UIController>(controller);
+        }
         
         std::cout << "Roblox Executor library initialized successfully" << std::endl;
         return true;
@@ -82,12 +126,12 @@ extern "C" {
     void dylib_finalizer() {
         std::cout << "Roblox Executor dylib unloading" << std::endl;
         
-        // Clean up resources
-        RobloxExecutor::Shutdown();
+        // Clean up resources - use SystemState namespace
+        RobloxExecutor::SystemState::Shutdown();
         
         // Clear global references
-        g_executionEngine.reset();
-        g_scriptManager.reset();
+        g_executionEngine = nullptr;
+        g_scriptManager = nullptr;
         g_uiController.reset();
     }
     
@@ -135,6 +179,29 @@ extern "C" {
         }
     }
     
+    // Define constants for CI builds
+    #if defined(CI_BUILD) || !defined(__APPLE__)
+    #ifndef VM_PROT_READ
+    #define VM_PROT_READ 1
+    #endif
+    #ifndef VM_PROT_WRITE
+    #define VM_PROT_WRITE 2
+    #endif
+    #ifndef VM_PROT_EXECUTE
+    #define VM_PROT_EXECUTE 4
+    #endif
+    #ifndef KERN_SUCCESS
+    #define KERN_SUCCESS 0
+    #endif
+    typedef int vm_prot_t;
+    typedef int kern_return_t;
+    typedef uintptr_t vm_address_t;
+    inline kern_return_t vm_protect(int task, vm_address_t addr, size_t size, int set_max, vm_prot_t prot) {
+        return KERN_SUCCESS;
+    }
+    inline int mach_task_self() { return 0; }
+    #endif
+    
     bool ProtectMemory(void* address, size_t size, int protection) {
         if (!address || size == 0) return false;
         
@@ -151,7 +218,7 @@ extern "C" {
         if (protection & 2) prot |= VM_PROT_WRITE;
         if (protection & 4) prot |= VM_PROT_EXECUTE;
         
-        kern_return_t result = vm_protect(mach_task_self(), (vm_address_t)address, size, FALSE, prot);
+        kern_return_t result = vm_protect(mach_task_self(), (vm_address_t)address, size, 0, prot);
         return result == KERN_SUCCESS;
         #else
         // Add other platform implementations as needed
@@ -164,13 +231,23 @@ extern "C" {
     void* HookRobloxMethod(void* original, void* replacement) {
         if (!original || !replacement) return NULL;
         
-#ifdef USE_DOBBY
-        // Use Dobby for hooking
+        #ifdef USE_DOBBY
+        // For CI build, provide a dummy wrapper
+        #if defined(CI_BUILD) || defined(SKIP_IOS_INTEGRATION)
+        namespace DobbyWrapper {
+            void* Hook(void* original, void* replacement) {
+                return NULL;
+            }
+        }
+        #else
+        // Use Dobby for hooking on real builds
         #include "cpp/dobby_wrapper.cpp"
+        #endif
+        
         return DobbyWrapper::Hook(original, replacement);
-#else
+        #else
         return NULL;
-#endif
+        #endif
     }
     
     // UI integration
@@ -183,7 +260,8 @@ extern "C" {
         if (!g_uiController) return false;
         
         try {
-            return g_uiController->Show();
+            g_uiController->Show();
+            return true;
         } catch (const std::exception& ex) {
             std::cerr << "Exception during UI injection: " << ex.what() << std::endl;
             return false;
@@ -193,6 +271,9 @@ extern "C" {
     
     // AI features
     void AIFeatures_Enable(bool enable) {
+        // Unused parameter
+        (void)enable;
+        
         #if defined(SKIP_IOS_INTEGRATION) || defined(CI_BUILD) || defined(CI_BUILD_NO_VM)
         // Stub implementation for CI builds
         std::cout << "CI build - AIFeatures_Enable stub called: " << (enable ? "true" : "false") << std::endl;

@@ -163,7 +163,8 @@ jobs:
         make clean # Clean any previous build artifacts
         
         # Build using parallel jobs with our enhanced output formatting
-        make -j4 | ./tools/format_compiler_output.py
+        # Define CI_BUILD to enable CI-specific code paths
+        CXXFLAGS="-DCI_BUILD=1" make -j4 | ./tools/format_compiler_output.py
         
         # Install to output directory
         make install

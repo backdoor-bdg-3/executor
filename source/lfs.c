@@ -21,8 +21,8 @@
 #include <sys/param.h> // For MAXPATHLEN
 #endif
 
-// Include the Lua compatibility header which defines all necessary functions
-#include "cpp/lua_compatibility.h"
+// Include the C-compatible Lua header (not the C++ one)
+#include "cpp/c_compatibility.h"
 
 // Ensure we use our compatibility layer's definitions
 #undef new_lib
