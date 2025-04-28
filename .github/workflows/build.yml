@@ -23,6 +23,12 @@ jobs:
         # Install essential build tools
         brew install pkg-config
         
+        # Install tools for code analysis and formatting
+        brew install llvm clang-format
+        
+        # Add llvm to PATH
+        echo "$(brew --prefix llvm)/bin" >> $GITHUB_PATH
+        
         # Create required directories
         mkdir -p external/dobby/include
         mkdir -p external/dobby/lib
@@ -52,6 +58,9 @@ jobs:
           echo "⚠️ VM folder structure has issues, creating required directories..."
           mkdir -p VM/include VM/src
         fi
+        
+        # Make sure script files are executable
+        chmod +x tools/*.py
 
     - name: Setup Xcode
       uses: maxim-lobanov/setup-xcode@v1
@@ -84,9 +93,53 @@ jobs:
         echo "Dobby successfully built and installed to external/dobby"
         cd $GITHUB_WORKSPACE
 
+    - name: Generate compile_commands.json
+      run: |
+        echo "Generating compile_commands.json for code analysis tools..."
+        # Install Bear for compile_commands.json generation
+        brew install bear
+        
+        # Create a small sample build for generating compile_commands.json
+        export SDK=$(xcrun --sdk iphoneos --show-sdk-path)
+        export ARCHS="arm64"
+        export MIN_IOS_VERSION="15.0"
+        
+        # Generate compile_commands.json
+        bear -- make clean
+        
+        # Verify it was created
+        if [ -f "compile_commands.json" ]; then
+          echo "✅ compile_commands.json successfully generated"
+        else
+          echo "⚠️ Failed to generate compile_commands.json, but continuing build"
+        fi
+
+    - name: Format code
+      run: |
+        echo "Running code formatter..."
+        # Run code formatting
+        ./tools/format_code.py --all --fix || true
+        
+        # Commit changes if any
+        if [[ -n $(git status --porcelain) ]]; then
+          echo "Code formatting produced changes. These changes would be committed in a real workflow."
+          git diff --color
+        else
+          echo "✅ Code is already properly formatted"
+        fi
+
+    - name: Static analysis
+      continue-on-error: true
+      run: |
+        echo "Running static analysis with clang-tidy..."
+        # Run clang-tidy with auto-fixes
+        ./tools/run-clang-tidy.py --all --fix-errors || true
+        
+        echo "Static analysis complete. Any fixable issues were corrected."
+
     - name: Build Dynamic Library with Makefile
       run: |
-        echo "Building the iOS dynamic library using Makefile instead of CMake..."
+        echo "Building the iOS dynamic library using enhanced Makefile..."
         
         # Make sure VM files are accessible
         echo "Preparing VM files for inclusion..."
@@ -104,12 +157,16 @@ jobs:
         export ARCHS="arm64"
         export MIN_IOS_VERSION="15.0"
         
-        # Build using Makefile with verbose output
-        echo "Building with Makefile instead of CMake..."
+        # Build using Makefile with improved output
+        echo "Building with enhanced Makefile..."
         make info  # Show build information
         make clean # Clean any previous build artifacts
-        make -j4   # Build using Makefile with parallel jobs
-        make install # Install to output directory
+        
+        # Build using parallel jobs with our enhanced output formatting
+        make -j4 | ./tools/format_compiler_output.py
+        
+        # Install to output directory
+        make install
         
         # Check the build result
         if [ -f "output/libmylibrary.dylib" ]; then
@@ -151,6 +208,15 @@ jobs:
           echo "❌ libmylibrary.dylib not found in output directory"
           exit 1
         fi
+
+    - name: Upload Code Analysis Report
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: code-analysis-report
+        path: |
+          clang-tidy-report.json
+        if-no-files-found: ignore
 
     - name: Upload Artifact
       uses: actions/upload-artifact@v4

@@ -1,5 +1,5 @@
 # Makefile for iOS Roblox Executor
-# Replacement for CMake build system
+# Enhanced with improved compiler output and code quality tools
 
 # Compiler and flags
 CXX := clang++
@@ -23,9 +23,33 @@ else
     DEFS := -DPRODUCTION_BUILD=1
 endif
 
+# Use colored/enhanced output if the terminal supports it
+COLORIZE_OUTPUT := 1
+ifeq ($(COLORIZE_OUTPUT),1)
+    # Determine if we can use the pretty output formatter
+    FORMATTER := $(shell command -v python3 >/dev/null 2>&1 && echo "| ./tools/format_compiler_output.py")
+endif
+
+# Check if clang-tidy and clang-format are available
+HAVE_CLANG_TIDY := $(shell command -v clang-tidy >/dev/null 2>&1 && echo 1 || echo 0)
+HAVE_CLANG_FORMAT := $(shell command -v clang-format >/dev/null 2>&1 && echo 1 || echo 0)
+
+# Static analysis flags - enable clang warnings
+STATIC_ANALYSIS_FLAGS := -Wextra-semi -Wunused-parameter -Wshadow -Wpointer-arith -Wuninitialized
+STATIC_ANALYSIS_FLAGS += -Wconditional-uninitialized -Wunused-lambda-capture -Wextra-tokens -Wloop-analysis
+
+# Add compiler flags for improved diagnostics
 CXXFLAGS := -std=c++17 -fPIC $(OPT_FLAGS) -Wall -Wextra -fvisibility=hidden -ferror-limit=0 -fno-limit-debug-info
+CXXFLAGS += -fdiagnostics-color=always -fdiagnostics-show-category=name -fdiagnostics-absolute-paths
+CXXFLAGS += $(STATIC_ANALYSIS_FLAGS)
+
 CFLAGS := -fPIC $(OPT_FLAGS) -Wall -Wextra -fvisibility=hidden -ferror-limit=0 -fno-limit-debug-info
+CFLAGS += -fdiagnostics-color=always -fdiagnostics-show-category=name -fdiagnostics-absolute-paths
+
 OBJCXXFLAGS := -std=c++17 -fPIC $(OPT_FLAGS) -Wall -Wextra -fvisibility=hidden -ferror-limit=0 -fno-limit-debug-info
+OBJCXXFLAGS += -fdiagnostics-color=always -fdiagnostics-show-category=name -fdiagnostics-absolute-paths
+OBJCXXFLAGS += $(STATIC_ANALYSIS_FLAGS)
+
 LDFLAGS := -shared
 
 # Define platform
@@ -134,8 +158,27 @@ ifdef USE_DOBBY
     INCLUDES += $(DOBBY_INCLUDE)
 endif
 
-# Main rule
-all: directories $(STATIC_LIB) $(DYLIB)
+# Main rule - auto-format code by default
+all: check-tools auto-format directories $(STATIC_LIB) $(DYLIB)
+
+# Check if our tools are available
+check-tools:
+	@echo "Checking build tools..."
+	@if [ ! -x ./tools/format_compiler_output.py ]; then \
+		echo "  ⚠️  Warning: format_compiler_output.py is not executable. Run 'chmod +x ./tools/format_compiler_output.py' to fix."; \
+	fi
+	@if [ ! -x ./tools/format_code.py ]; then \
+		echo "  ⚠️  Warning: format_code.py is not executable. Run 'chmod +x ./tools/format_code.py' to fix."; \
+	fi
+	@if [ ! -x ./tools/run-clang-tidy.py ]; then \
+		echo "  ⚠️  Warning: run-clang-tidy.py is not executable. Run 'chmod +x ./tools/run-clang-tidy.py' to fix."; \
+	fi
+	@if [ $(HAVE_CLANG_FORMAT) -eq 0 ]; then \
+		echo "  ⚠️  Warning: clang-format not found. Code formatting will be unavailable."; \
+	fi
+	@if [ $(HAVE_CLANG_TIDY) -eq 0 ]; then \
+		echo "  ⚠️  Warning: clang-tidy not found. Static analysis will be unavailable."; \
+	fi
 
 # Create necessary directories
 directories:
@@ -143,33 +186,36 @@ directories:
 
 # Build static library
 $(STATIC_LIB): $(ROBLOX_EXEC_OBJECTS)
-	$(AR) rcs $@ $^
+	$(AR) rcs $@ $^ $(FORMATTER)
 
 # Build dynamic library
 $(DYLIB): $(VM_OBJECTS) $(LIB_OBJECTS) $(STATIC_LIB)
-	$(CXX) $(LDFLAGS) -o $@ $(VM_OBJECTS) $(LIB_OBJECTS) -L./lib -lroblox_execution $(DOBBY_LIB) $(FRAMEWORKS)
+	$(CXX) $(LDFLAGS) -o $@ $(VM_OBJECTS) $(LIB_OBJECTS) -L./lib -lroblox_execution $(DOBBY_LIB) $(FRAMEWORKS) $(FORMATTER)
 ifdef IS_APPLE
 	@install_name_tool -id @executable_path/lib/mylibrary.dylib $@
 endif
 
-# Compilation rules
+# Compilation rules with colorized output
 %.o: %.cpp
-	$(CXX) $(CXXFLAGS) $(INCLUDES) $(DEFS) -c $< -o $@
+	$(CXX) $(CXXFLAGS) $(INCLUDES) $(DEFS) -c $< -o $@ $(FORMATTER)
 
 %.o: %.c
-	$(CC) $(CFLAGS) $(INCLUDES) $(DEFS) -c $< -o $@
+	$(CC) $(CFLAGS) $(INCLUDES) $(DEFS) -c $< -o $@ $(FORMATTER)
 
 %.o: %.mm
-	$(OBJCXX) $(OBJCXXFLAGS) $(INCLUDES) $(DEFS) -c $< -o $@
+	$(OBJCXX) $(OBJCXXFLAGS) $(INCLUDES) $(DEFS) -c $< -o $@ $(FORMATTER)
 
 # Clean rule
 clean:
 	rm -rf $(VM_OBJECTS) $(LIB_OBJECTS) $(ROBLOX_EXEC_OBJECTS) $(STATIC_LIB) $(DYLIB)
+	rm -f clang-tidy-report.json
+	@echo "✅ Clean completed"
 
 # Install rule
 install: all
 	@mkdir -p $(ROOT_DIR)/output
 	cp $(DYLIB) $(ROOT_DIR)/output/libmylibrary.dylib
+	@echo "✅ Installation completed"
 
 # Print info about build (useful for debugging)
 info:
@@ -179,19 +225,70 @@ info:
 	@echo "Exec Sources: $(EXEC_CPP_SOURCES)"
 	@echo "iOS CPP Sources: $(iOS_CPP_SOURCES)"
 	@echo "iOS MM Sources: $(iOS_MM_SOURCES)"
+	@echo "Formatter: $(FORMATTER)"
+	@echo "clang-tidy: $(HAVE_CLANG_TIDY)"
+	@echo "clang-format: $(HAVE_CLANG_FORMAT)"
+
+# Code formatting and analysis rules
+format-check:
+	@echo "Checking code formatting..."
+	@if [ $(HAVE_CLANG_FORMAT) -eq 1 ]; then \
+		./tools/format_code.py --check; \
+	else \
+		echo "⚠️ clang-format not installed. Cannot check formatting."; \
+		exit 1; \
+	fi
+
+format:
+	@echo "Formatting code..."
+	@if [ $(HAVE_CLANG_FORMAT) -eq 1 ]; then \
+		./tools/format_code.py --fix; \
+	else \
+		echo "⚠️ clang-format not installed. Cannot format code."; \
+		exit 1; \
+	fi
+
+auto-format:
+	@if [ $(HAVE_CLANG_FORMAT) -eq 1 ]; then \
+		./tools/format_code.py --fix --check 2>/dev/null || true; \
+	fi
+
+analyze:
+	@echo "Running static analysis with clang-tidy..."
+	@if [ $(HAVE_CLANG_TIDY) -eq 1 ]; then \
+		./tools/run-clang-tidy.py --all; \
+	else \
+		echo "⚠️ clang-tidy not installed. Cannot run static analysis."; \
+		exit 1; \
+	fi
+
+fix-analysis:
+	@echo "Running clang-tidy with auto-fixes..."
+	@if [ $(HAVE_CLANG_TIDY) -eq 1 ]; then \
+		./tools/run-clang-tidy.py --all --fix; \
+	else \
+		echo "⚠️ clang-tidy not installed. Cannot run static analysis."; \
+		exit 1; \
+	fi
 
 # Help target
 help:
 	@echo "Available targets:"
-	@echo "  all     - Build everything (default)"
-	@echo "  clean   - Remove build artifacts"
-	@echo "  install - Install dylib to /usr/local/lib"
-	@echo "  info    - Print build information"
+	@echo "  all           - Build everything with auto-formatting (default)"
+	@echo "  clean         - Remove build artifacts"
+	@echo "  install       - Install dylib to output directory"
+	@echo "  info          - Print build information"
+	@echo "  format-check  - Check if code is properly formatted"
+	@echo "  format        - Format code using clang-format"
+	@echo "  analyze       - Run static analysis with clang-tidy"
+	@echo "  fix-analysis  - Run clang-tidy with automatic fixes"
 	@echo ""
 	@echo "Configuration variables:"
-	@echo "  BUILD_TYPE=Debug|Release - Set build type (default: Release)"
-	@echo "  USE_DOBBY=0|1           - Enable Dobby hooking (default: 1)"
-	@echo "  ENABLE_AI_FEATURES=0|1   - Enable AI features (default: 1)"
-	@echo "  ENABLE_ADVANCED_BYPASS=0|1 - Enable advanced bypass (default: 1)"
+	@echo "  BUILD_TYPE=Debug|Release      - Set build type (default: Release)"
+	@echo "  USE_DOBBY=0|1                 - Enable Dobby hooking (default: 1)"
+	@echo "  ENABLE_AI_FEATURES=0|1        - Enable AI features (default: 1)"
+	@echo "  ENABLE_ADVANCED_BYPASS=0|1    - Enable advanced bypass (default: 1)"
+	@echo "  COLORIZE_OUTPUT=0|1           - Enable colorized compiler output (default: 1)"
 
-.PHONY: all clean install directories info help
+.PHONY: all clean install directories info help check-tools \
+	format-check format analyze fix-analysis auto-format

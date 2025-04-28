@@ -1,0 +1,16 @@
+---
+# Basic .clang-format configuration for iOS executor project
+BasedOnStyle: Google
+AccessModifierOffset: -4
+ColumnLimit: 100
+IndentWidth: 4
+TabWidth: 4
+UseTab: Never
+BreakBeforeBraces: Stroustrup
+AllowShortIfStatementsOnASingleLine: false
+AllowShortLoopsOnASingleLine: false
+AllowShortFunctionsOnASingleLine: Inline
+PointerAlignment: Left
+SortIncludes: true
+NamespaceIndentation: All
+---
