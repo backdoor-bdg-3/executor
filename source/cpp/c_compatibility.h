@@ -6,10 +6,10 @@
 #include <stddef.h>
 #include <stdarg.h>
 
-// Include the Luau/Lua headers directly
-#include "lua.h"
-#include "lauxlib.h"
-#include "lualib.h"
+// Include the Luau/Lua headers directly - use relative paths with VM/include/ prefix
+#include "../../VM/include/lua.h"
+#include "../../VM/include/lauxlib.h"
+#include "../../VM/include/lualib.h"
 
 #ifdef __cplusplus
 extern "C" {

@@ -108,7 +108,18 @@ DEFS += -DUSE_LUAU=1 -DLUAU_FASTINT_SUPPORT=1 -DUSE_LUA=1 -DENABLE_ERROR_REPORTI
 
 # Add Luau/VM-specific defines - use single quotes to avoid shell interpretation issues
 VM_DEFS := '-DLUAU_LIKELY(x)=__builtin_expect(!!(x), 1)' \
-           '-DLUAU_UNLIKELY(x)=__builtin_expect(!!(x), 0)'
+           '-DLUAU_UNLIKELY(x)=__builtin_expect(!!(x), 0)' \
+           '-DLUA_SIGNATURE="\\033Lua"' \
+           '-DLUA_MASKCOUNT=LUA_MASKCALL' \
+           '-Dluaopen_base=luaL_openlibs' \
+           '-DLBC_CONSTANT_NUMBER=Luau::LBC_CONSTANT_NUMBER' \
+           '-DLBC_CONSTANT_STRING=Luau::LBC_CONSTANT_STRING' \
+           '-DLBC_CONSTANT_IMPORT=Luau::LBC_CONSTANT_IMPORT' \
+           '-DLBC_CONSTANT_TABLE=Luau::LBC_CONSTANT_TABLE' \
+           '-DLBC_CONSTANT_CLOSURE=Luau::LBC_CONSTANT_CLOSURE' \
+           '-DLBC_CONSTANT_VECTOR=Luau::LBC_CONSTANT_VECTOR' \
+           '-DluaL_error=luaL_error' \
+           '-DluaL_loadbuffer=luaL_loadbufferx'
 
 ifdef USE_DOBBY
     DEFS += -DUSE_DOBBY=1
@@ -222,8 +233,9 @@ $(VM_SRC_DIR)/%.o: $(VM_SRC_DIR)/%.cpp
 	$(CXX) $(CXXFLAGS) $(INCLUDES) $(DEFS) $(VM_DEFS) -c $< -o $@ $(FORMATTER)
 
 # Special compilation rules for C files with only basic includes
+# Add VM include path explicitly and skip most other include paths for C file
 $(SOURCE_DIR)/lfs.o: $(SOURCE_DIR)/lfs.c
-	$(CC) $(CFLAGS) -I$(VM_INCLUDE_DIR) -c $< -o $@ $(FORMATTER)
+	$(CC) $(CFLAGS) -I$(VM_INCLUDE_DIR) -I$(SOURCE_DIR) -I$(CPP_DIR) -c $< -o $@ $(FORMATTER)
 
 # Compilation rules with colorized output
 %.o: %.cpp
